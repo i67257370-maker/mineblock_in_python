@@ -1,8 +1,9 @@
 import pygame
-from OpenGL.GL import GL_COMPILE, GL_NEAREST, GL_RGBA, GL_QUADS, GL_TEXTURE_2D, \
+from OpenGL.GL import GL_COMPILE, GL_NEAREST, GL_QUADS, GL_RGBA, GL_TEXTURE_2D, \
     GL_TEXTURE_MAG_FILTER, GL_TEXTURE_MIN_FILTER, GL_UNSIGNED_BYTE, glBegin, glBindTexture, \
-    glColor3f, glEnd, glEndList, glGenLists, glGenTextures, glNewList, glTexCoord2f, \
-    glTexImage2D, glTexParameteri, glVertex3f
+    glColor3f, glEnd, glEndList, glGenLists, glGenTextures, glNewList, glPopMatrix, \
+    glPushMatrix, glRotatef, glTexCoord2f, glTexImage2D, glTexParameteri, glTranslatef, \
+    glVertex3f
 from tex import tile_uv
 
 def upload_atlas(surf):
@@ -74,3 +75,35 @@ def _box(cx, cy, cz, sx, sy, sz, rgb):
         for vx, vy, vz in verts:
             glVertex3f(vx, vy, vz)
     glEnd()
+
+
+
+def draw_zhigul(car):
+    glPushMatrix()
+    glTranslatef(car.x, car.y, car.z)
+    glRotatef(car.yaw, 0.0, 1.0, 0.0)
+
+    for wx in (-0.85, 0.85):
+        for wz in (-1.35, 1.35):
+            _box(wx, 0.34, wz, 0.26, 0.68, 0.7, TIRE)
+
+    _box(0.0, 0.78, 0.0, 1.72, 0.85, 4.25, BODY)
+
+    _box(0.0, 1.45, -0.15, 1.58, 0.6, 2.0, GLASS)
+    _box(-0.78, 1.45, -0.15, 0.14, 0.6, 2.0, BODY)
+    _box(0.78, 1.45, -0.15, 0.14, 0.6, 2.0, BODY)
+    _box(0.0, 1.45, 0.85, 1.58, 0.6, 0.16, BODY)
+    _box(0.0, 1.78, -0.15, 1.60, 0.14, 2.1, BODY)
+
+    _box(-0.40, 1.25, 0.15, 0.6, 0.2, 0.7, SEAT)
+    _box(0.40, 1.25, 0.15, 0.6, 0.2, 0.7, SEAT)
+
+    _box(0.0, 0.5, -2.22, 1.85, 0.22, 0.2, METAL)
+    _box(0.0, 0.5, 2.22, 1.85, 0.22, 0.2, METAL)
+
+    _box(-0.55, 0.88, -2.14, 0.34, 0.22, 0.12, HEADLIGHT)
+    _box(0.55, 0.88, -2.14, 0.34, 0.22, 0.12, HEADLIGHT)
+    _box(-0.55, 0.88, 2.14, 0.34, 0.22, 0.12, TAILLIGHT)
+    _box(0.55, 0.88, 2.14, 0.34, 0.22, 0.12, TAILLIGHT)
+
+    glPopMatrix()
