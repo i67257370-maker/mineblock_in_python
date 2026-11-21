@@ -1,0 +1,781 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Жигули: Бесконечная дорога 3D</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;background:#0b0e12;font-family:'Segoe UI',Arial,sans-serif;}
+  canvas{display:block;}
+  .panel{position:fixed;left:16px;top:16px;background:rgba(8,12,16,.62);border:1px solid rgba(255,255,255,.14);
+         border-radius:10px;padding:10px 14px;color:#eef2f5;user-select:none;backdrop-filter:blur(4px);}
+  .panel .row{display:flex;align-items:center;gap:10px;margin:2px 0;font-size:14px;letter-spacing:.4px;}
+  #fuelOuter{width:190px;height:12px;background:#10161c;border-radius:6px;overflow:hidden;border:1px solid rgba(255,255,255,.18);}
+  #fuelFill{height:100%;width:40%;background:linear-gradient(90deg,#63d97a,#8fe694);transition:width .15s linear;}
+  #fuelOuter.low #fuelFill{background:linear-gradient(90deg,#e33b3b,#ff7a5c);}
+  #fuelOuter.flash{box-shadow:0 0 0 2px #59ff6e;}
+  .big{font-size:19px;font-weight:600;}
+  #toast{position:fixed;left:50%;bottom:34px;transform:translateX(-50%);background:rgba(8,12,16,.78);
+         border:1px solid #ffe97d;color:#ffe97d;padding:10px 20px;border-radius:8px;font-size:16px;
+         white-space:pre-line;text-align:center;display:none;max-width:70vw;z-index:5;}
+  #hint{position:fixed;left:50%;bottom:8px;transform:translateX(-50%);color:rgba(255,255,255,.85);
+        font-size:13px;letter-spacing:.5px;text-shadow:0 1px 3px #000;z-index:4;white-space:nowrap;}
+  .ovl{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;
+       background:rgba(5,8,12,.55);z-index:10;}
+  .box{background:rgba(10,15,20,.88);border:1px solid rgba(255,233,125,.8);color:#ffe97d;
+       padding:28px 38px;border-radius:14px;font-size:17px;line-height:1.75;text-align:center;
+       max-width:640px;box-shadow:0 10px 60px rgba(0,0,0,.6);white-space:pre-line;}
+  .box h1{margin:0 0 10px;font-size:26px;letter-spacing:1px;color:#ffd84d;}
+  .box button{margin-top:14px;font-size:17px;padding:10px 34px;border-radius:8px;border:1px solid #ffd84d;
+       background:#1a222c;color:#ffd84d;cursor:pointer;letter-spacing:1px;}
+  .box button:hover{background:#2a3745;}
+  #over{display:none;}
+</style>
+</head>
+<body>
+<div class="panel">
+  <div class="row"><span>⛽</span><div id="fuelOuter"><div id="fuelFill"></div></div><span id="fuelTxt" class="big">42 л</span></div>
+  <div class="row"><span class="big" id="kmTxt">0.00 км</span><span style="opacity:.55">·</span><span class="big" id="spdTxt">0 км/ч</span></div>
+</div>
+<div id="hint"></div>
+<div id="toast"></div>
+<div class="ovl" id="intro">
+  <div class="box"><h1>ЖИГУЛИ: БЕСКОНЕЧНАЯ ДОРОГА</h1>
+Часть 1 — собери по поляне детали: 4 колеса, двигатель, АКБ
+Часть 2 — найди канистру с бензином
+Часть 3 — подойди к машине и нажми E: заправка и завод
+
+Дальше — только дорога и горизонт. Следи за баком:
+АЗС у обочины, канистры на асфальте. Как далеко уедешь?
+
+WASD / стрелки — движение · E — действие · Enter — старт
+<div><button id="startBtn">НАЧАТЬ</button></div></div>
+</div>
+<div class="ovl" id="over">
+  <div class="box"><h1>⛽ БЕНЗИН КОНЧИЛСЯ</h1><div id="overStats"></div>
+<div><button id="againBtn">ПОЕХАЛИ ЕЩЁ РАЗ</button></div></div>
+</div>
+<script src="vendor/three.min.js"></script>
+<script>
+"use strict";
+// ================== базовая сцена ==================
+const W0 = 15;                    // половина ширины дороги
+const KM = 150;                   // юнитов в одном километре
+const SPAWN_AHEAD = 430;
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xd2e0ee, 70, 380);
+
+const camera = new THREE.PerspectiveCamera(68, innerWidth/innerHeight, 0.1, 2000);
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.06;
+document.body.appendChild(renderer.domElement);
+const MAXANISO = renderer.capabilities.getMaxAnisotropy();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// небо
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(1400, 24, 14),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite:false, fog:false,
+    vertexShader: 'varying vec3 vP; void main(){ vP=position; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+    fragmentShader: 'varying vec3 vP; void main(){ float h=clamp(normalize(vP).y, 0.0, 1.0); vec3 top=vec3(0.22,0.44,0.76); vec3 hor=vec3(0.83,0.89,0.95); gl_FragColor=vec4(mix(hor, top, pow(h,0.5)), 1.0); }'
+  }));
+scene.add(sky);
+
+// свет
+scene.add(new THREE.HemisphereLight(0xbfd6ea, 0x557a44, 0.85));
+const sun = new THREE.DirectionalLight(0xfff1d6, 2.4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -80; sun.shadow.camera.right = 80;
+sun.shadow.camera.top = 80; sun.shadow.camera.bottom = -80;
+sun.shadow.camera.near = 10; sun.shadow.camera.far = 260;
+sun.shadow.bias = -0.0004; sun.shadow.normalBias = 0.03;
+scene.add(sun); scene.add(sun.target);
+
+// ================== процедурные текстуры ==================
+function cv(w, h){ const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+function speckle(x2d, w, h, n, colors, size){
+  for (let i = 0; i < n; i++){
+    x2d.fillStyle = colors[(Math.random()*colors.length)|0];
+    x2d.fillRect(Math.random()*w, Math.random()*h, size||1, size||1);
+  }
+}
+function tex(c, rx, ry){
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = MAXANISO;
+  if (rx) t.repeat.set(rx, ry || rx);
+  return t;
+}
+
+function grassCanvas(){
+  const c = cv(256,256), g = c.getContext('2d');
+  g.fillStyle = '#4d8a3c'; g.fillRect(0,0,256,256);
+  speckle(g,256,256,5200,['#417a33','#58a04a','#3c7030','#61a84f','#376b2c'],2);
+  speckle(g,256,256,900, ['#2f6125','#6cb35c'],1);
+  for (let i=0;i<70;i++){ const x=Math.random()*256, y=Math.random()*256;
+    g.strokeStyle='rgba(38,84,29,.5)'; g.beginPath(); g.moveTo(x,y); g.lineTo(x+2,y-5); g.stroke(); }
+  return c;
+}
+function roadCanvas(){
+  const c = cv(256,512), g = c.getContext('2d');
+  g.fillStyle = '#3a3d41'; g.fillRect(0,0,256,512);
+  speckle(g,256,512,6000,['#33363a','#42464b','#2f3236','#484c52'],2);
+  speckle(g,256,512,1500,['#4e535a','#2a2d30'],1);
+  const wear=(x,w)=>{ const gr=g.createLinearGradient(x,0,x+w,0);
+    gr.addColorStop(0,'rgba(0,0,0,.22)'); gr.addColorStop(.5,'rgba(0,0,0,.34)'); gr.addColorStop(1,'rgba(0,0,0,.22)');
+    g.fillStyle=gr; g.fillRect(x,0,w,512); };
+  wear(52,44); wear(160,44);
+  for (let i=0;i<10;i++){ g.strokeStyle='rgba(20,22,24,.6)'; g.lineWidth=1;
+    g.beginPath(); let x=Math.random()*256, y=Math.random()*512; g.moveTo(x,y);
+    for(let j=0;j<5;j++){ x+=(Math.random()-.5)*26; y+=12+Math.random()*22; g.lineTo(x,y); } g.stroke(); }
+  g.fillStyle='rgba(238,234,222,.92)';
+  g.fillRect(9,0,6,512); g.fillRect(241,0,6,512);
+  g.fillStyle='rgba(240,236,210,.95)';
+  g.fillRect(124,56,9,190);
+  return c;
+}
+function brickCanvas(){
+  const c = cv(256,256), g = c.getContext('2d');
+  g.fillStyle = '#9b9184'; g.fillRect(0,0,256,256);
+  const bw=32, bh=15, cols=['#8d4a3a','#a05a44','#96483b','#a76452','#8a4234'];
+  for (let r=0, y=0; y<256; y+=bh, r++){
+    const off = r%2 ? -bw/2 : 0;
+    for (let x=off; x<256; x+=bw){
+      g.fillStyle = cols[(Math.random()*cols.length)|0];
+      g.fillRect(x+1.5, y+1.5, bw-3, bh-3);
+      g.fillStyle = 'rgba(0,0,0,.18)';
+      g.fillRect(x+1.5, y+bh-4, bw-3, 2);
+    }
+  }
+  speckle(g,256,256,900,['rgba(255,255,255,.08)','rgba(0,0,0,.12)'],2);
+  return c;
+}
+function roofCanvas(){
+  const c = cv(256,256), g = c.getContext('2d');
+  g.fillStyle = '#5a3a34'; g.fillRect(0,0,256,256);
+  for (let y=0;y<256;y+=16){
+    for (let x=(y/16)%2?0:-16; x<256; x+=32){
+      g.fillStyle = ['#5a3a34','#63423a','#523229','#6b4640'][(Math.random()*4)|0];
+      g.fillRect(x+1, y+1, 30, 14);
+      g.strokeStyle='rgba(0,0,0,.35)'; g.strokeRect(x+1, y+1, 30, 14);
+    }
+  }
+  speckle(g,256,256,700,['rgba(0,0,0,.15)','rgba(255,255,255,.06)'],2);
+  return c;
+}
+function signCanvas(text1, text2){
+  const c = cv(256,128), g = c.getContext('2d');
+  g.fillStyle = '#c8322f'; g.fillRect(0,0,256,128);
+  g.strokeStyle = '#fff'; g.lineWidth = 8; g.strokeRect(6,6,244,116);
+  g.fillStyle = '#fff'; g.textAlign = 'center';
+  g.font = 'bold 58px Arial'; g.fillText(text1, 128, 66);
+  g.font = 'bold 26px Arial'; g.fillText(text2, 128, 104);
+  return c;
+}
+function canisterCanvas(){
+  const c = cv(128,128), g = c.getContext('2d');
+  g.fillStyle = '#2e7d32'; g.fillRect(0,0,128,128);
+  g.fillStyle = '#1b5e20'; g.fillRect(0,0,128,26);
+  g.fillStyle = '#ffd84d'; g.fillRect(20,44,88,52);
+  g.fillStyle = '#1a1a1a'; g.textAlign='center';
+  g.font = 'bold 30px Arial'; g.fillText('БЕН', 64, 66); g.fillText('ЗИН', 64, 94);
+  return c;
+}
+
+const T = {
+  grass: tex(grassCanvas(), 70, 70),
+  road:  tex(roadCanvas(), 1, 1),
+  brick: tex(brickCanvas(), 2, 1.6),
+  roof:  tex(roofCanvas(), 5, 3),
+  sign:  tex(signCanvas('АЗС','ТОПЛИВО')),
+  canister: tex(canisterCanvas()),
+};
+
+const MAT = {
+  grass: new THREE.MeshStandardMaterial({map:T.grass, roughness:1}),
+  road:  new THREE.MeshStandardMaterial({map:T.road, roughness:.94}),
+  brick: new THREE.MeshStandardMaterial({map:T.brick, roughness:.92}),
+  roof:  new THREE.MeshStandardMaterial({map:T.roof, roughness:.9}),
+  wood:  new THREE.MeshStandardMaterial({color:0x6b4a2a, roughness:1}),
+  leaf:  new THREE.MeshStandardMaterial({color:0x2f6b24, roughness:1}),
+  leaf2: new THREE.MeshStandardMaterial({color:0x3f8a30, roughness:1}),
+  asphaltPad: new THREE.MeshStandardMaterial({color:0x63676c, roughness:.95}),
+  pump:  new THREE.MeshStandardMaterial({color:0xc8322f, roughness:.6}),
+  dark:  new THREE.MeshStandardMaterial({color:0x27292d, roughness:.8}),
+  steel: new THREE.MeshStandardMaterial({color:0x9aa0a6, roughness:.5, metalness:.6}),
+  tire:  new THREE.MeshStandardMaterial({color:0x17181a, roughness:.95}),
+  glass: new THREE.MeshStandardMaterial({color:0x9fd4e8, roughness:.15, metalness:.3}),
+  canister: new THREE.MeshStandardMaterial({map:T.canister, roughness:.5}),
+  yellow: new THREE.MeshStandardMaterial({color:0xffd84d, roughness:.5}),
+  engine: new THREE.MeshStandardMaterial({color:0x6e7378, roughness:.55, metalness:.7}),
+  cherry: new THREE.MeshStandardMaterial({color:0x7a1f1f, roughness:.32, metalness:.25}),
+  frame: new THREE.MeshStandardMaterial({color:0x6e6e6e, roughness:.85}),
+};
+
+// ================== земля и дорога ==================
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), MAT.grass);
+ground.rotation.x = -Math.PI/2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const SEG_LEN = 40, SEG_N = 22;
+const roadSegs = [];
+const roadGeo = new THREE.PlaneGeometry(W0*2, SEG_LEN);
+for (let i = 0; i < SEG_N; i++){
+  const m = new THREE.Mesh(roadGeo, MAT.road);
+  m.rotation.x = -Math.PI/2;
+  m.position.set(0, 0.02, 60 - i*SEG_LEN);
+  m.receiveShadow = true;
+  scene.add(m); roadSegs.push(m);
+}
+
+// ================== машина ==================
+function buildCar(){
+  const g = new THREE.Group();
+  const bodyMat = MAT.frame.clone();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.94, 0.6, 4.6), bodyMat);
+  body.position.y = 0.62; body.castShadow = true; g.add(body);
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.66, 0.34, 1.9), MAT.glass);
+  cabin.position.set(0, 1.06, 0.25); cabin.castShadow = true; g.add(cabin);
+  const roof = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.12, 2.0), bodyMat);
+  roof.position.set(0, 1.28, 0.25); roof.castShadow = true; g.add(roof);
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(1.94, 0.34, 1.1), bodyMat);
+  nose.position.set(0, 0.44, -2.2); nose.castShadow = true; g.add(nose);
+
+  const engine = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.5, 0.8), MAT.engine);
+  engine.position.set(0, 0.78, -1.5); engine.visible = false; g.add(engine);
+  const battery = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.34, 0.4), MAT.dark);
+  battery.position.set(0.55, 0.8, -1.0); battery.visible = false; g.add(battery);
+
+  const wheels = [];
+  const wheelGeo = new THREE.CylinderGeometry(0.36, 0.36, 0.26, 18);
+  const hubGeo = new THREE.CylinderGeometry(0.16, 0.16, 0.27, 12);
+  [[-0.98,-1.5],[0.98,-1.5],[-0.98,1.45],[0.98,1.45]].forEach(([wx, wz], i) => {
+    const pivot = new THREE.Group();
+    pivot.position.set(wx, 0.36, wz);
+    const spin = new THREE.Group();
+    const tire = new THREE.Mesh(wheelGeo, MAT.tire);
+    tire.rotation.z = Math.PI/2; tire.castShadow = true;
+    const hub = new THREE.Mesh(hubGeo, MAT.steel);
+    hub.rotation.z = Math.PI/2;
+    spin.add(tire); spin.add(hub);
+    pivot.add(spin);
+    pivot.visible = false;
+    g.add(pivot);
+    wheels.push({pivot, spin});
+  });
+
+  const bulbMat = new THREE.MeshStandardMaterial({color:0xfff7c0, emissive:0x000000, roughness:.4});
+  const bulbs = [];
+  [-0.62, 0.62].forEach(x => {
+    const b = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.16, 0.06), bulbMat);
+    b.position.set(x, 0.6, -2.72); g.add(b); bulbs.push(b);
+  });
+  const headlights = [];
+  [-0.62, 0.62].forEach(x => {
+    const s = new THREE.SpotLight(0xfff4d0, 0, 70, 0.55, 0.6, 1.4);
+    s.position.set(x, 0.7, -2.6);
+    s.target.position.set(x*1.6, 0, -30);
+    g.add(s); g.add(s.target);
+    headlights.push(s);
+  });
+  return {group:g, bodyMat, wheels, engine, battery, bulbs, bulbMat, headlights};
+}
+const carV = buildCar();
+carV.group.position.set(0, 0, 0);
+scene.add(carV.group);
+const car = {x:0, z:0, speed:0, angle:0, maxSpeed:33, fuel:0, fuelMax:100,
+             wheels:0, engine:false, battery:false, canister:false, ready:false};
+
+// ================== игрок ==================
+function buildGuy(){
+  const g = new THREE.Group();
+  const mat = {
+    shirt: new THREE.MeshStandardMaterial({color:0x6e2b2b, roughness:.9}),
+    pants: new THREE.MeshStandardMaterial({color:0x2d3f66, roughness:.9}),
+    skin:  new THREE.MeshStandardMaterial({color:0xe8b88a, roughness:.8}),
+    cap:   new THREE.MeshStandardMaterial({color:0x2d3f66, roughness:.9}),
+  };
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.6, 0.26), mat.shirt);
+  torso.position.y = 1.05; torso.castShadow = true; g.add(torso);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.19, 14, 12), mat.skin);
+  head.position.y = 1.52; head.castShadow = true; g.add(head);
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.1, 0.44), mat.cap);
+  cap.position.y = 1.68; g.add(cap);
+  const legL = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.7, 0.2), mat.pants);
+  legL.position.set(-0.12, 0.4, 0); legL.castShadow = true; g.add(legL);
+  const legR = legL.clone(); legR.position.x = 0.12; g.add(legR);
+  const armL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.5, 0.16), mat.shirt);
+  armL.position.set(-0.32, 1.02, 0); armL.castShadow = true; g.add(armL);
+  const armR = armL.clone(); armR.position.x = 0.32; g.add(armR);
+  g.userData.legs = [legL, legR];
+  return g;
+}
+const guyV = buildGuy();
+guyV.position.set(0, 0, 10);
+scene.add(guyV);
+const guy = {x:0, z:10, moving:false};
+
+// ================== предметы и объекты ==================
+const startItems = [];   // {kind:'wheel'|'engine'|'battery'|'canister', mesh, x, z, taken}
+function propWheel(){
+  const g = new THREE.Group();
+  const t = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.34, 20), MAT.tire);
+  t.rotation.x = Math.PI/2; t.castShadow = true; g.add(t);
+  const h = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.36, 12), MAT.steel);
+  h.rotation.x = Math.PI/2; g.add(h);
+  return g;
+}
+function propEngine(){
+  const g = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.9, 1.1), MAT.engine);
+  b.castShadow = true; g.add(b);
+  const top = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.25, 0.7), MAT.dark);
+  top.position.y = 0.55; g.add(top);
+  return g;
+}
+function propBattery(){
+  const g = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.6, 0.7), MAT.dark);
+  b.castShadow = true; g.add(b);
+  const y = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.12, 0.4), MAT.yellow);
+  y.position.y = 0.36; g.add(y);
+  return g;
+}
+function propCanister(){
+  const g = new THREE.Group();
+  const b = new THREE.Mesh(new THREE.BoxGeometry(0.85, 1.1, 0.5), MAT.canister);
+  b.castShadow = true; g.add(b);
+  const n = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.14, 0.14), MAT.dark);
+  n.position.set(0.22, 0.62, 0); g.add(n);
+  return g;
+}
+[[ 'wheel', -19, 7], ['wheel', 19, -2], ['wheel', -17, -18],
+ ['wheel', 22, -33], ['engine', -25, -46], ['battery', 33, -61],
+ ['canister', -28, -77]].forEach(([kind, x, z]) => {
+  const mesh = kind === 'wheel' ? propWheel() : kind === 'engine' ? propEngine()
+             : kind === 'battery' ? propBattery() : propCanister();
+  mesh.position.set(x, 0.8, z);
+  scene.add(mesh);
+  startItems.push({kind, mesh, x, z, baseY:0.8, taken:false});
+});
+
+const world = [];        // объекты трассы
+let nextZ = -90;
+
+function addTree(x, z){
+  const s = 0.8 + Math.random()*0.9;
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22*s, 0.3*s, 2.2*s, 8), MAT.wood);
+  trunk.position.y = 1.1*s; trunk.castShadow = true; g.add(trunk);
+  const c1 = new THREE.Mesh(new THREE.ConeGeometry(1.7*s, 3.2*s, 9), MAT.leaf);
+  c1.position.y = 3.4*s; c1.castShadow = true; g.add(c1);
+  const c2 = new THREE.Mesh(new THREE.ConeGeometry(1.25*s, 2.4*s, 9), MAT.leaf2);
+  c2.position.y = 4.9*s; c2.castShadow = true; g.add(c2);
+  g.position.set(x, 0, z);
+  scene.add(g);
+  world.push({kind:'tree', mesh:g, z, r:0});
+}
+function addHouse(x, z){
+  const g = new THREE.Group();
+  const base = new THREE.Mesh(new THREE.BoxGeometry(9, 5.5, 8), MAT.brick);
+  base.position.y = 2.75; base.castShadow = true; base.receiveShadow = true; g.add(base);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(6.6, 3.2, 4), MAT.roof);
+  roof.position.y = 7.1; roof.rotation.y = Math.PI/4; roof.castShadow = true; g.add(roof);
+  const door = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.2, 0.15),
+    new THREE.MeshStandardMaterial({color:0x4a3524, roughness:.9}));
+  door.position.set(0, 1.1, -4.05); g.add(door);
+  const winMat = new THREE.MeshStandardMaterial({color:0xffe97d, emissive:0x6b5a10, roughness:.4});
+  [-2.8, 2.8].forEach(wx => {
+    const win = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.3, 0.15), winMat);
+    win.position.set(wx, 3.2, -4.05); g.add(win);
+  });
+  g.position.set(x, 0, z);
+  g.rotation.y = 0;
+  scene.add(g);
+  world.push({kind:'house', mesh:g, z, r:0});
+  if (Math.random() < 0.55){
+    const c = propCanister();
+    c.position.set(x - Math.sign(x)*11, 0.8, z + 4);
+    scene.add(c);
+    world.push({kind:'canister', mesh:c, z: z+4, bob:0});
+  }
+}
+function addStation(x, z){
+  const side = Math.sign(x) || 1;
+  const g = new THREE.Group();
+  const pad = new THREE.Mesh(new THREE.PlaneGeometry(26, 20), MAT.asphaltPad);
+  pad.rotation.x = -Math.PI/2; pad.position.y = 0.04; pad.receiveShadow = true; g.add(pad);
+  const b = new THREE.Mesh(new THREE.BoxGeometry(11, 5, 9), MAT.brick);
+  b.position.set(side*8, 2.5, -6.5); b.castShadow = true; b.receiveShadow = true; g.add(b);
+  const r = new THREE.Mesh(new THREE.BoxGeometry(12, 0.6, 10), MAT.roof);
+  r.position.set(side*8, 5.4, -6.5); r.castShadow = true; g.add(r);
+  const shopSign = new THREE.Mesh(new THREE.PlaneGeometry(7, 2.2),
+    new THREE.MeshBasicMaterial({map:tex(signCanvas('АЗС','ОТКРЫТО')), side:THREE.DoubleSide}));
+  shopSign.position.set(side*8, 4.6, -6.5 + side*4.55); g.add(shopSign);
+  const poles = new THREE.MeshStandardMaterial({color:0xd8d8d8, roughness:.5, metalness:.5});
+  [[3.4,3],[-3.4,3],[3.4,-3],[-3.4,-3]].forEach(([px, pz]) => {
+    const p = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 5, 8), poles);
+    p.position.set(px, 2.5, pz); g.add(p);
+  });
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(9.5, 0.4, 7.5),
+    new THREE.MeshStandardMaterial({color:0xe8e6de, roughness:.5}));
+  canopy.position.set(0, 5.2, 0); canopy.castShadow = true; g.add(canopy);
+  [-2.2, 2.2].forEach(pz => {
+    const pump = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.7, 0.7), MAT.pump);
+    pump.position.set(0, 0.9, pz); pump.castShadow = true; g.add(pump);
+  });
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 9, 8), MAT.steel);
+  pole.position.set(-side*14, 4.5, 2); g.add(pole);
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 3.2),
+    new THREE.MeshBasicMaterial({map:T.sign, side:THREE.DoubleSide}));
+  sign.position.set(-side*14, 8.4, 2);
+  sign.rotation.y = side > 0 ? -Math.PI/2 : Math.PI/2;
+  g.add(sign);
+  g.position.set(x, 0, z);
+  scene.add(g);
+  world.push({kind:'station', mesh:g, z, padX:x, padZ:z, r:0});
+}
+function addCanister(x, z){
+  const c = propCanister();
+  c.position.set(x, 0.8, z);
+  scene.add(c);
+  world.push({kind:'canister', mesh:c, z, bob:Math.random()*6});
+}
+function addPothole(x, z){
+  const m = new THREE.Mesh(new THREE.CircleGeometry(1.7, 20), MAT.dark);
+  m.rotation.x = -Math.PI/2; m.position.set(x, 0.05, z);
+  m.receiveShadow = true;
+  scene.add(m);
+  world.push({kind:'pothole', mesh:m, z, hitAt:- 1});
+}
+
+function ensureWorld(focusZ){
+  while (nextZ > focusZ - SPAWN_AHEAD){
+    nextZ -= 55 + Math.random()*45;
+    const z = nextZ;
+    const roll = Math.random();
+    if (roll < 0.18 && z < -350){
+      addStation((Math.random()<0.5 ? -1 : 1) * 27, z);
+    } else if (roll < 0.38){
+      addHouse((Math.random()<0.5 ? -1 : 1) * (30 + Math.random()*8), z);
+    } else if (roll < 0.58){
+      addCanister(-W0 + 3 + Math.random()*(W0-3)*2, z);
+    } else if (roll < 0.72){
+      addPothole(-W0 + 4 + Math.random()*(W0-4)*2, z);
+    } else {
+      const side = Math.random()<0.5 ? -1 : 1;
+      const n = 2 + (Math.random()*5|0);
+      for (let i = 0; i < n; i++){
+        addTree(side*(24 + Math.random()*66), z + (Math.random()-0.5)*50);
+      }
+    }
+  }
+  for (let i = world.length - 1; i >= 0; i--){
+    if (world[i].z > focusZ + 70 || (world[i].mesh && world[i].mesh.userData.taken)){
+      scene.remove(world[i].mesh);
+      world.splice(i, 1);
+    }
+  }
+}
+
+// road сегменты едут вместе с машиной
+function updateRoad(focusZ){
+  for (const seg of roadSegs){
+    if (seg.position.z > focusZ + 90){
+      seg.position.z -= SEG_N * SEG_LEN;
+    }
+    if (seg.position.z < focusZ - SPAWN_AHEAD - SEG_LEN){
+      seg.position.z += SEG_N * SEG_LEN;
+    }
+  }
+  ground.position.z = focusZ;
+}
+
+// ================== HUD и оверлеи ==================
+const el = id => document.getElementById(id);
+const fuelFill = el('fuelFill'), fuelOuter = el('fuelOuter'), fuelTxt = el('fuelTxt');
+const kmTxt = el('kmTxt'), spdTxt = el('spdTxt'), hintEl = el('hint'), toastEl = el('toast');
+let toastTimer = 0;
+function toast(text, sec){
+  toastEl.textContent = text;
+  toastEl.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, sec*1000);
+}
+let state = 'intro';
+el('startBtn').onclick = () => start();
+el('againBtn').onclick = () => location.reload();
+function start(){
+  el('intro').style.display = 'none';
+  state = 'walk';
+}
+let bestKm = 0;
+
+// ================== ввод ==================
+const keys = {};
+addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  if (state === 'intro' && (e.code === 'Enter' || e.code === 'Space')) start();
+  else if (state === 'walk' && e.code === 'KeyE') interact();
+  else if (state === 'over' && (e.code === 'Enter' || e.code === 'Space')) location.reload();
+});
+addEventListener('keyup', e => { keys[e.code] = false; });
+
+function interact(){
+  const d = Math.hypot(guy.x - car.x, guy.z - car.z);
+  if (d > 7 || car.ready) return;
+  const wheels = car.wheels, need = 4;
+  if (wheels < need || !car.engine || !car.battery || !car.canister){
+    const miss = [];
+    if (wheels < need) miss.push('колёса (' + wheels + '/4)');
+    if (!car.engine) miss.push('двигатель');
+    if (!car.battery) miss.push('аккумулятор');
+    if (!car.canister) miss.push('канистра с бензином');
+    toast('Не хватает:\n— ' + miss.join('\n— '), 3);
+  } else {
+    car.ready = true;
+    car.fuel = 42;
+    state = 'drive';
+    carV.bodyMat.color.set(0x7a1f1f);
+    carV.bodyMat.metalness = 0.35; carV.bodyMat.roughness = 0.28;
+    carV.bulbMat.emissive.set(0xffe9a0); carV.bulbMat.emissiveIntensity = 2;
+    carV.headlights.forEach(s => { s.intensity = 180; });
+    toast('Жигули на ходу! Gaz — W, тормоз — S,\nруль — A/D. Собирай канистры, заправляйся на АЗС!', 4.5);
+  }
+}
+
+// ================== игровой цикл ==================
+const clock = new THREE.Clock();
+let km = 0, elapsed = 0;
+
+function pickupCheck(){
+  for (const it of startItems){
+    if (it.taken) continue;
+    if (Math.hypot(guy.x - it.x, guy.z - it.z) < 2.6){
+      it.taken = true;
+      it.mesh.userData.taken = true;
+      scene.remove(it.mesh);
+      if (it.kind === 'wheel' && car.wheels < 4){
+        carV.wheels[car.wheels].pivot.visible = true;
+        car.wheels++;
+      } else if (it.kind === 'engine'){
+        car.engine = true; carV.engine.visible = true;
+      } else if (it.kind === 'battery'){
+        car.battery = true; carV.battery.visible = true;
+      } else if (it.kind === 'canister'){
+        car.canister = true;
+      }
+      const left = (4 - car.wheels) + (!car.engine?1:0) + (!car.battery?1:0) + (!car.canister?1:0);
+      toast(left ? 'Осталось собрать: ' + left : 'Всё собрано! К машине и жми E!', 2);
+    }
+  }
+}
+
+function updateWalk(dt){
+  let dx = 0, dz = 0;
+  if (keys['KeyW'] || keys['ArrowUp']) dz -= 1;
+  if (keys['KeyS'] || keys['ArrowDown']) dz += 1;
+  if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
+  guy.moving = !!(dx || dz);
+  if (guy.moving){
+    const l = Math.hypot(dx, dz);
+    guy.x += dx/l * 12 * dt;
+    guy.z += dz/l * 12 * dt;
+    guyV.rotation.y = Math.atan2(dx, dz);
+  }
+  guy.x = Math.max(-90, Math.min(90, guy.x));
+  guyV.position.set(guy.x, 0, guy.z);
+  if (guy.moving){
+    const step = Math.sin(elapsed*11);
+    guyV.userData.legs[0].rotation.x = step*0.55;
+    guyV.userData.legs[1].rotation.x = -step*0.55;
+  } else {
+    guyV.userData.legs[0].rotation.x = 0;
+    guyV.userData.legs[1].rotation.x = 0;
+  }
+  pickupCheck();
+  const dNear = Math.hypot(guy.x - car.x, guy.z - car.z);
+  if (car.wheels >= 4 && car.engine && car.battery && car.canister){
+    hintEl.textContent = dNear < 7 ? 'Нажми E — заправить и завестись' : 'Возвращайся к машине и нажми E';
+  } else {
+    hintEl.textContent = 'Собери детали Жигуля по поляне (подойди вплотную)';
+  }
+  ensureWorld(Math.min(guy.z, car.z));
+  updateRoad(Math.min(guy.z, car.z));
+}
+
+function updateDrive(dt){
+  const offroad = Math.abs(car.x) > W0 - 2;
+  let acc = 0;
+  if (car.fuel > 0){
+    if (keys['KeyW'] || keys['ArrowUp']) acc = 24;
+    if (keys['KeyS'] || keys['ArrowDown']) acc = -30;
+  }
+  car.speed += acc*dt;
+  car.speed -= car.speed * (offroad ? 1.4 : 0.45) * dt;
+  const vmax = offroad ? 13 : car.maxSpeed;
+  car.speed = Math.max(-7, Math.min(vmax, car.speed));
+  car.z -= car.speed * dt;
+
+  const steer = ((keys['KeyA'] || keys['ArrowLeft']) ? -1 : 0) + ((keys['KeyD'] || keys['ArrowRight']) ? 1 : 0);
+  if (car.speed !== 0){
+    const sign = car.speed >= 0 ? 1 : -1;
+    car.x += steer * 14 * dt * Math.min(1, Math.abs(car.speed)/12) * sign;
+    car.angle += (steer * 0.13 * Math.min(1, Math.abs(car.speed)/20) * sign - car.angle) * Math.min(1, dt*10);
+  }
+  car.x = Math.max(-80, Math.min(80, car.x));
+
+  const burn = (0.35 + Math.abs(car.speed)/car.maxSpeed * 1.15) * (offroad ? 1.8 : 1);
+  car.fuel = Math.max(0, car.fuel - burn*dt);
+  km = -car.z / KM;
+
+  // колёса и руль визуально
+  for (let i = 0; i < 4; i++){
+    carV.wheels[i].spin.rotation.x -= car.speed * dt / 0.36;
+    if (i < 2) carV.wheels[i].pivot.rotation.y = steer * 0.38;
+  }
+  carV.group.position.set(car.x, 0, car.z);
+  carV.group.rotation.y = -car.angle;
+
+  ensureWorld(car.z);
+  updateRoad(car.z);
+
+  // объекты
+  for (const o of world){
+    const dx = car.x - o.mesh.position.x;
+    const dz = car.z - o.z;
+    if (o.kind === 'canister'){
+      o.bob += dt;
+      o.mesh.position.y = 0.8 + Math.sin(o.bob*2.2)*0.2;
+      o.mesh.rotation.y += dt*1.5;
+      if (Math.hypot(dx, dz) < 2.6 && !o.mesh.userData.taken){
+        o.mesh.userData.taken = true;
+        scene.remove(o.mesh);
+        car.fuel = Math.min(car.fuelMax, car.fuel + 25);
+        toast('+25 л!', 1.2);
+      }
+    } else if (o.kind === 'station'){
+      const inPad = Math.abs(car.x - o.padX) < 11 && Math.abs(dz) < 8 && Math.abs(car.speed) < 20;
+      if (inPad && car.fuel < car.fuelMax - 0.01){
+        car.fuel = Math.min(car.fuelMax, car.fuel + 9*dt);
+        fuelOuter.classList.add('flash');
+      }
+      if (!inPad) fuelOuter.classList.remove('flash');
+    } else if (o.kind === 'pothole'){
+      const now = clock.elapsedTime;
+      if (Math.hypot(dx, dz) < o.mesh.geometry.parameters.radius && Math.abs(car.speed) > 9 && now - (o.hitAt||-9) > 0.8){
+        o.hitAt = now;
+        car.speed *= 0.5;
+      }
+    }
+  }
+
+  if (state === 'drive' && car.fuel <= 0 && Math.abs(car.speed) < 1.2){
+    state = 'over';
+    bestKm = Math.max(bestKm, km);
+    el('overStats').textContent = 'Пройдено: ' + km.toFixed(2) + ' км\nРекорд: ' + bestKm.toFixed(2) + ' км';
+    el('over').style.display = 'flex';
+    fuelOuter.classList.remove('flash');
+  }
+}
+
+function updateHUD(){
+  const f = car.fuel / car.fuelMax;
+  fuelFill.style.width = (f*100).toFixed(1) + '%';
+  fuelOuter.classList.toggle('low', f < 0.22 && car.fuel > 0);
+  fuelTxt.textContent = Math.round(car.fuel) + ' л';
+  kmTxt.textContent = km.toFixed(2) + ' км';
+  const kmh = Math.round(Math.abs(car.speed) * 2.7);
+  spdTxt.textContent = kmh + ' км/ч';
+  if (car.fuel > 0 && f < 0.22 && state === 'drive'){
+    hintEl.textContent = 'МАЛО БЕНЗИНА! Ищи АЗС или канистру!';
+    hintEl.style.color = '#ff9d7a';
+  } else if (state === 'drive'){
+    hintEl.textContent = 'W — газ · S — тормоз · A/D — руль';
+    hintEl.style.color = '';
+    if (km >= bestKm && bestKm > 0){
+      hintEl.textContent = '★ ЛИЧНЫЙ РЕКОРД! ' + km.toFixed(2) + ' км';
+      hintEl.style.color = '#ffd84d';
+    }
+  }
+}
+
+let camShake = 0;
+function updateCamera(dt){
+  if (state === 'drive'){
+    const tx = car.x*0.5, tz = car.z + 11;
+    camera.position.x += (tx - camera.position.x) * Math.min(1, dt*4);
+    camera.position.y += (4.6 - camera.position.y) * Math.min(1, dt*4);
+    camera.position.z += (tz - camera.position.z) * Math.min(1, dt*10);
+    camera.lookAt(car.x*0.5, 1.4, car.z - 12);
+    if (camShake > 0){
+      camera.position.x += (Math.random()-0.5)*camShake;
+      camera.position.y += (Math.random()-0.5)*camShake;
+      camShake = Math.max(0, camShake - dt*2);
+    }
+  } else {
+    camera.position.set(guy.x*0.5, 8, guy.z + 12);
+    camera.lookAt(guy.x*0.5, 1.2, guy.z - 4);
+  }
+  sky.position.copy(camera.position);
+
+  const fx = state === 'drive' ? car.x : guy.x;
+  const fz = state === 'drive' ? car.z : guy.z;
+  sun.position.set(fx + 40, 70, fz + 30);
+  sun.target.position.set(fx, 0, fz);
+}
+
+let prevSpeed = 0;
+function loop(){
+  requestAnimationFrame(loop);
+  const dt = Math.min(0.05, clock.getDelta());
+  elapsed += dt;
+  if (state === 'intro'){
+    // лёгкое вращение камеры вокруг машины
+    const a = elapsed * 0.25;
+    camera.position.set(Math.sin(a)*14, 5, Math.cos(a)*14);
+    camera.lookAt(0, 1, -6);
+    sky.position.copy(camera.position);
+    sun.position.set(40, 70, 30);
+  } else if (state === 'walk'){
+    updateWalk(dt);
+    updateCamera(dt);
+  } else if (state === 'drive'){
+    updateDrive(dt);
+    updateCamera(dt);
+    if (prevSpeed - Math.abs(car.speed) > 8) camShake = 0.5;
+    prevSpeed = Math.abs(car.speed);
+  }
+  // анимация предметов
+  for (const it of startItems){
+    if (it.taken) continue;
+    it.mesh.position.y = it.baseY + Math.sin(elapsed*2 + it.baseY)*0.18;
+    it.mesh.rotation.y += dt*0.8;
+  }
+  updateHUD();
+  renderer.render(scene, camera);
+}
+ensureWorld(0);
+updateRoad(0);
+window.__game = {get state(){return state;}, guy, car, startItems, interact, setKey:(c,v)=>{keys[c]=v;}, start};
+loop();
+</script>
+</body>
+</html>
